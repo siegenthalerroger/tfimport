@@ -46,6 +46,8 @@ func GetImportID(ctx *ProviderContext, resourceType string, config map[string]an
 		return extractAzurermImportID(ctx, resourceType, config)
 	case "scaleway":
 		return extractScalewayImportID(ctx, resourceType, config)
+	case "keycloak":
+		return extractKeycloakImportID(ctx, resourceType, config)
 	default:
 		return MessageProviderNotSupported
 	}

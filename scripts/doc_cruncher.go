@@ -36,6 +36,7 @@ func main() {
 		"google":     getGoogleStrategy(),
 		"azurerm":    getAzurermStrategy(),
 		"scaleway":   getScalewayStrategy(),
+		"keycloak":   getKeycloakStrategy(),
 	}
 
 	strategy, exists := strategies[strings.ToLower(*providerName)]
