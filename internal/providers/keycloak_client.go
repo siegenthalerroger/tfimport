@@ -35,6 +35,15 @@ type KeycloakClient interface {
 	ListTopLevelGroups(ctx context.Context, realm string) ([]KeycloakObject, error)
 	ListAuthenticationFlows(ctx context.Context, realm string) ([]KeycloakObject, error)
 	ListUserFederations(ctx context.Context, realm string) ([]KeycloakObject, error)
+
+	// Nested lookups: the parent is identified by its server-generated GUID
+	// (resolved either from concrete config or via the Expression Tracer).
+	ListSubGroups(ctx context.Context, realm, parentGUID string) ([]KeycloakObject, error)
+	ListLdapMappers(ctx context.Context, realm, federationGUID string) ([]KeycloakObject, error)
+	ListClientProtocolMappers(ctx context.Context, realm, clientGUID string) ([]KeycloakObject, error)
+	ListClientScopeProtocolMappers(ctx context.Context, realm, clientScopeGUID string) ([]KeycloakObject, error)
+	ListIdentityProviderMappers(ctx context.Context, realm, alias string) ([]KeycloakObject, error)
+	ListAuthorizationObjects(ctx context.Context, realm, resourceServerGUID, kind string) ([]KeycloakObject, error)
 }
 
 // GetKeycloakClient lazily constructs a Keycloak admin client from the same
@@ -43,48 +52,56 @@ type KeycloakClient interface {
 // credentials are configured, so the tool degrades gracefully without Keycloak.
 func (p *ProviderContext) GetKeycloakClient() KeycloakClient {
 	p.keycloakOnce.Do(func() {
-		baseURL := strings.TrimRight(os.Getenv("KEYCLOAK_URL"), "/")
-		if baseURL == "" {
-			log.Printf("Keycloak: KEYCLOAK_URL not set, skipping API-based ID resolution")
-			return
+		if c := newKeycloakHTTPClientFromEnv(); c != nil {
+			p.keycloakClient = c
 		}
-
-		basePath := os.Getenv("KEYCLOAK_BASE_PATH")
-		adminURL := strings.TrimRight(os.Getenv("KEYCLOAK_ADMIN_URL"), "/")
-		if adminURL == "" {
-			adminURL = baseURL
-		}
-
-		authRealm := os.Getenv("KEYCLOAK_REALM")
-		if authRealm == "" {
-			authRealm = "master"
-		}
-
-		clientID := os.Getenv("KEYCLOAK_CLIENT_ID")
-		username := os.Getenv("KEYCLOAK_USER")
-		if clientID == "" && username != "" {
-			clientID = "admin-cli"
-		}
-
-		c := &keycloakHTTPClient{
-			tokenURL:     baseURL + basePath + "/realms/" + url.PathEscape(authRealm) + "/protocol/openid-connect/token",
-			adminBase:    adminURL + basePath + "/admin/realms/",
-			clientID:     clientID,
-			clientSecret: os.Getenv("KEYCLOAK_CLIENT_SECRET"),
-			username:     username,
-			password:     os.Getenv("KEYCLOAK_PASSWORD"),
-			staticToken:  os.Getenv("KEYCLOAK_ACCESS_TOKEN"),
-			httpClient:   &http.Client{Timeout: keycloakTimeout()},
-		}
-
-		if c.staticToken == "" && c.clientSecret == "" && (c.username == "" || c.password == "") {
-			log.Printf("Keycloak: no usable credentials (set KEYCLOAK_CLIENT_SECRET or KEYCLOAK_USER/KEYCLOAK_PASSWORD), skipping API-based ID resolution")
-			return
-		}
-
-		p.keycloakClient = c
 	})
 	return p.keycloakClient
+}
+
+// newKeycloakHTTPClientFromEnv builds a client from the KEYCLOAK_* environment
+// variables, or returns nil when the URL or credentials are absent.
+func newKeycloakHTTPClientFromEnv() *keycloakHTTPClient {
+	baseURL := strings.TrimRight(os.Getenv("KEYCLOAK_URL"), "/")
+	if baseURL == "" {
+		log.Printf("Keycloak: KEYCLOAK_URL not set, skipping API-based ID resolution")
+		return nil
+	}
+
+	basePath := os.Getenv("KEYCLOAK_BASE_PATH")
+	adminURL := strings.TrimRight(os.Getenv("KEYCLOAK_ADMIN_URL"), "/")
+	if adminURL == "" {
+		adminURL = baseURL
+	}
+
+	authRealm := os.Getenv("KEYCLOAK_REALM")
+	if authRealm == "" {
+		authRealm = "master"
+	}
+
+	clientID := os.Getenv("KEYCLOAK_CLIENT_ID")
+	username := os.Getenv("KEYCLOAK_USER")
+	if clientID == "" && username != "" {
+		clientID = "admin-cli"
+	}
+
+	c := &keycloakHTTPClient{
+		tokenURL:     baseURL + basePath + "/realms/" + url.PathEscape(authRealm) + "/protocol/openid-connect/token",
+		adminBase:    adminURL + basePath + "/admin/realms/",
+		clientID:     clientID,
+		clientSecret: os.Getenv("KEYCLOAK_CLIENT_SECRET"),
+		username:     username,
+		password:     os.Getenv("KEYCLOAK_PASSWORD"),
+		staticToken:  os.Getenv("KEYCLOAK_ACCESS_TOKEN"),
+		httpClient:   &http.Client{Timeout: keycloakTimeout()},
+	}
+
+	if c.staticToken == "" && c.clientSecret == "" && (c.username == "" || c.password == "") {
+		log.Printf("Keycloak: no usable credentials (set KEYCLOAK_CLIENT_SECRET or KEYCLOAK_USER/KEYCLOAK_PASSWORD), skipping API-based ID resolution")
+		return nil
+	}
+
+	return c
 }
 
 func keycloakTimeout() time.Duration {
@@ -296,4 +313,31 @@ func (c *keycloakHTTPClient) ListAuthenticationFlows(ctx context.Context, realm 
 		out = append(out, KeycloakObject{ID: r.ID, Match: r.Alias})
 	}
 	return out, nil
+}
+
+func (c *keycloakHTTPClient) ListSubGroups(ctx context.Context, realm, parentGUID string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "groups/"+url.PathEscape(parentGUID)+"/children", nil)
+}
+
+func (c *keycloakHTTPClient) ListLdapMappers(ctx context.Context, realm, federationGUID string) ([]KeycloakObject, error) {
+	q := url.Values{}
+	q.Set("parent", federationGUID)
+	q.Set("type", "org.keycloak.storage.ldap.mappers.LDAPStorageMapper")
+	return c.listNamed(ctx, realm, "components", q)
+}
+
+func (c *keycloakHTTPClient) ListClientProtocolMappers(ctx context.Context, realm, clientGUID string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "clients/"+url.PathEscape(clientGUID)+"/protocol-mappers/models", nil)
+}
+
+func (c *keycloakHTTPClient) ListClientScopeProtocolMappers(ctx context.Context, realm, clientScopeGUID string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "client-scopes/"+url.PathEscape(clientScopeGUID)+"/protocol-mappers/models", nil)
+}
+
+func (c *keycloakHTTPClient) ListIdentityProviderMappers(ctx context.Context, realm, alias string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "identity-provider/instances/"+url.PathEscape(alias)+"/mappers", nil)
+}
+
+func (c *keycloakHTTPClient) ListAuthorizationObjects(ctx context.Context, realm, resourceServerGUID, kind string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "clients/"+url.PathEscape(resourceServerGUID)+"/authz/resource-server/"+kind, nil)
 }
