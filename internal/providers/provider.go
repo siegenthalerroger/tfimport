@@ -14,6 +14,9 @@ type ProviderContext struct {
 	awsClient *AWSClientContext
 	awsOnce   sync.Once
 
+	keycloakClient KeycloakClient
+	keycloakOnce   sync.Once
+
 	Plan            *tfjson.Plan
 	CurrentResource *tfjson.ResourceChange
 }
