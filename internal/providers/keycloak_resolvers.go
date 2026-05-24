@@ -66,7 +66,7 @@ func ResolveKeycloakImportID(ctx *ProviderContext, resourceType string, config m
 	if client == nil {
 		return KeycloakResolution{Status: KeycloakSkipped}
 	}
-	c := ctx.Context
+	apiCtx := ctx.Context
 	realmPrefix := realm + "/"
 
 	switch resourceType {
@@ -78,24 +78,24 @@ func ResolveKeycloakImportID(ctx *ProviderContext, resourceType string, config m
 		if clientID == "" {
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
-		objs, err := client.ListClients(c, realm, clientID)
-		return compose(realmPrefix, clientID, objs, err)
+		objs, err := client.ListClients(apiCtx, realm, clientID)
+		return resolveUnique(realmPrefix, clientID, objs, err)
 
 	case "keycloak_user":
 		username := configString(config, "username")
 		if username == "" {
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
-		objs, err := client.ListUsers(c, realm, username)
-		return compose(realmPrefix, username, objs, err)
+		objs, err := client.ListUsers(apiCtx, realm, username)
+		return resolveUnique(realmPrefix, username, objs, err)
 
 	case "keycloak_openid_client_scope", "keycloak_saml_client_scope":
 		name := configString(config, "name")
 		if name == "" {
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
-		objs, err := client.ListClientScopes(c, realm)
-		return compose(realmPrefix, name, objs, err)
+		objs, err := client.ListClientScopes(apiCtx, realm)
+		return resolveUnique(realmPrefix, name, objs, err)
 
 	case "keycloak_role":
 		name := configString(config, "name")
@@ -104,27 +104,27 @@ func ResolveKeycloakImportID(ctx *ProviderContext, resourceType string, config m
 		}
 		// keycloak_role.client_id (when set) is the owning client's GUID.
 		if clientGUID := tracedGUID(ctx, config, "client_id"); clientGUID != "" {
-			objs, err := client.ListClientRoles(c, realm, clientGUID)
-			return compose(realmPrefix, name, objs, err)
+			objs, err := client.ListClientRoles(apiCtx, realm, clientGUID)
+			return resolveUnique(realmPrefix, name, objs, err)
 		}
-		objs, err := client.ListRealmRoles(c, realm)
-		return compose(realmPrefix, name, objs, err)
+		objs, err := client.ListRealmRoles(apiCtx, realm)
+		return resolveUnique(realmPrefix, name, objs, err)
 
 	case "keycloak_authentication_flow":
 		alias := configString(config, "alias")
 		if alias == "" {
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
-		objs, err := client.ListAuthenticationFlows(c, realm)
-		return compose(realmPrefix, alias, objs, err)
+		objs, err := client.ListAuthenticationFlows(apiCtx, realm)
+		return resolveUnique(realmPrefix, alias, objs, err)
 
 	case "keycloak_ldap_user_federation", "keycloak_custom_user_federation":
 		name := configString(config, "name")
 		if name == "" {
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
-		objs, err := client.ListUserFederations(c, realm)
-		return compose(realmPrefix, name, objs, err)
+		objs, err := client.ListUserFederations(apiCtx, realm)
+		return resolveUnique(realmPrefix, name, objs, err)
 
 	// --- Groups (top-level or nested) ---------------------------------------
 
@@ -135,15 +135,15 @@ func ResolveKeycloakImportID(ctx *ProviderContext, resourceType string, config m
 		}
 		// A group's import ID is always realm/groupGUID regardless of nesting.
 		if parentGUID := tracedGUID(ctx, config, "parent_id"); parentGUID != "" {
-			objs, err := client.ListSubGroups(c, realm, parentGUID)
-			return compose(realmPrefix, name, objs, err)
+			objs, err := client.ListSubGroups(apiCtx, realm, parentGUID)
+			return resolveUnique(realmPrefix, name, objs, err)
 		}
-		if configReferences(ctx, config, "parent_id") {
+		if configReferences(ctx, "parent_id") {
 			// Nested group whose parent could not be resolved yet.
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
-		objs, err := client.ListTopLevelGroups(c, realm)
-		return compose(realmPrefix, name, objs, err)
+		objs, err := client.ListTopLevelGroups(apiCtx, realm)
+		return resolveUnique(realmPrefix, name, objs, err)
 
 	// --- LDAP mappers: parent is a user federation --------------------------
 
@@ -163,8 +163,8 @@ func ResolveKeycloakImportID(ctx *ProviderContext, resourceType string, config m
 		if name == "" || fedGUID == "" {
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
-		objs, err := client.ListLdapMappers(c, realm, fedGUID)
-		return compose(realmPrefix+fedGUID+"/", name, objs, err)
+		objs, err := client.ListLdapMappers(apiCtx, realm, fedGUID)
+		return resolveUnique(realmPrefix+fedGUID+"/", name, objs, err)
 
 	// --- Protocol mappers: parent is a client or a client scope -------------
 
@@ -189,12 +189,12 @@ func ResolveKeycloakImportID(ctx *ProviderContext, resourceType string, config m
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
 		if clientGUID := tracedGUID(ctx, config, "client_id"); clientGUID != "" {
-			objs, err := client.ListClientProtocolMappers(c, realm, clientGUID)
-			return compose(realmPrefix+"client/"+clientGUID+"/", name, objs, err)
+			objs, err := client.ListClientProtocolMappers(apiCtx, realm, clientGUID)
+			return resolveUnique(realmPrefix+"client/"+clientGUID+"/", name, objs, err)
 		}
 		if scopeGUID := tracedGUID(ctx, config, "client_scope_id"); scopeGUID != "" {
-			objs, err := client.ListClientScopeProtocolMappers(c, realm, scopeGUID)
-			return compose(realmPrefix+"client-scope/"+scopeGUID+"/", name, objs, err)
+			objs, err := client.ListClientScopeProtocolMappers(apiCtx, realm, scopeGUID)
+			return resolveUnique(realmPrefix+"client-scope/"+scopeGUID+"/", name, objs, err)
 		}
 		return KeycloakResolution{Status: KeycloakSkipped}
 
@@ -212,8 +212,8 @@ func ResolveKeycloakImportID(ctx *ProviderContext, resourceType string, config m
 		if name == "" || alias == "" {
 			return KeycloakResolution{Status: KeycloakSkipped}
 		}
-		objs, err := client.ListIdentityProviderMappers(c, realm, alias)
-		return compose(realmPrefix+alias+"/", name, objs, err)
+		objs, err := client.ListIdentityProviderMappers(apiCtx, realm, alias)
+		return resolveUnique(realmPrefix+alias+"/", name, objs, err)
 
 	// --- Authorization objects: parent is a resource-server client ----------
 
@@ -244,12 +244,12 @@ func resolveAuthz(ctx *ProviderContext, client KeycloakClient, realm string, con
 		return KeycloakResolution{Status: KeycloakSkipped}
 	}
 	objs, err := client.ListAuthorizationObjects(ctx.Context, realm, rsGUID, kind)
-	return compose(realm+"/"+rsGUID+"/", name, objs, err)
+	return resolveUnique(realm+"/"+rsGUID+"/", name, objs, err)
 }
 
-// compose applies the single-match rule and builds the import ID by prefixing
-// the matched GUID, distinguishing not-found from ambiguous results.
-func compose(prefix, key string, objs []KeycloakObject, err error) KeycloakResolution {
+// resolveUnique returns Resolved with prefix+GUID only when exactly one object
+// matches key, reporting NotFound, Ambiguous, or Error otherwise.
+func resolveUnique(prefix, key string, objs []KeycloakObject, err error) KeycloakResolution {
 	if err != nil {
 		log.Printf("Keycloak: lookup for %q failed: %v", key, err)
 		return KeycloakResolution{Status: KeycloakError, Key: key}
@@ -305,7 +305,7 @@ func tracedGUID(ctx *ProviderContext, config map[string]any, attr string) string
 // configReferences reports whether the given attribute is set in the resource's
 // configuration via a reference expression (even though its value is computed
 // and therefore absent from the plan's after-state).
-func configReferences(ctx *ProviderContext, _ map[string]any, attr string) bool {
+func configReferences(ctx *ProviderContext, attr string) bool {
 	if ctx == nil || ctx.Plan == nil || ctx.Plan.Config == nil || ctx.CurrentResource == nil {
 		return false
 	}
