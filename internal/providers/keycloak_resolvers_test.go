@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	tfjson "github.com/hashicorp/terraform-json"
 )
 
 type fakeKeycloakClient struct {
@@ -13,8 +15,14 @@ type fakeKeycloakClient struct {
 	realmRoles   []KeycloakObject
 	clientRoles  map[string][]KeycloakObject
 	groups       []KeycloakObject
+	subGroups    map[string][]KeycloakObject
 	flows        []KeycloakObject
 	federations  []KeycloakObject
+	ldapMappers  map[string][]KeycloakObject
+	clientPM     map[string][]KeycloakObject
+	scopePM      map[string][]KeycloakObject
+	idpMappers   map[string][]KeycloakObject
+	authz        map[string][]KeycloakObject // key: resourceServerGUID + "/" + kind
 	err          error
 }
 
@@ -41,6 +49,24 @@ func (f *fakeKeycloakClient) ListAuthenticationFlows(_ context.Context, _ string
 }
 func (f *fakeKeycloakClient) ListUserFederations(_ context.Context, _ string) ([]KeycloakObject, error) {
 	return f.federations, f.err
+}
+func (f *fakeKeycloakClient) ListSubGroups(_ context.Context, _, parentGUID string) ([]KeycloakObject, error) {
+	return f.subGroups[parentGUID], f.err
+}
+func (f *fakeKeycloakClient) ListLdapMappers(_ context.Context, _, federationGUID string) ([]KeycloakObject, error) {
+	return f.ldapMappers[federationGUID], f.err
+}
+func (f *fakeKeycloakClient) ListClientProtocolMappers(_ context.Context, _, clientGUID string) ([]KeycloakObject, error) {
+	return f.clientPM[clientGUID], f.err
+}
+func (f *fakeKeycloakClient) ListClientScopeProtocolMappers(_ context.Context, _, scopeGUID string) ([]KeycloakObject, error) {
+	return f.scopePM[scopeGUID], f.err
+}
+func (f *fakeKeycloakClient) ListIdentityProviderMappers(_ context.Context, _, alias string) ([]KeycloakObject, error) {
+	return f.idpMappers[alias], f.err
+}
+func (f *fakeKeycloakClient) ListAuthorizationObjects(_ context.Context, _, rsGUID, kind string) ([]KeycloakObject, error) {
+	return f.authz[rsGUID+"/"+kind], f.err
 }
 
 func ctxWithClient(c KeycloakClient) *ProviderContext {
@@ -131,6 +157,13 @@ func TestResolveKeycloakImportID(t *testing.T) {
 			want:         "my-realm/g-1",
 		},
 		{
+			name:         "nested group resolved under concrete parent GUID",
+			resourceType: "keycloak_group",
+			config:       map[string]any{"realm_id": "my-realm", "name": "backend", "parent_id": "parent-guid"},
+			client:       &fakeKeycloakClient{subGroups: map[string][]KeycloakObject{"parent-guid": {{ID: "child-guid", Match: "backend"}}}},
+			want:         "my-realm/child-guid",
+		},
+		{
 			name:         "authentication flow unique match",
 			resourceType: "keycloak_authentication_flow",
 			config:       map[string]any{"realm_id": "my-realm", "alias": "my-flow"},
@@ -143,6 +176,48 @@ func TestResolveKeycloakImportID(t *testing.T) {
 			config:       map[string]any{"realm_id": "my-realm", "name": "corp-ldap"},
 			client:       &fakeKeycloakClient{federations: []KeycloakObject{{ID: "fed-1", Match: "corp-ldap"}}},
 			want:         "my-realm/fed-1",
+		},
+		{
+			name:         "ldap mapper resolved under concrete federation GUID",
+			resourceType: "keycloak_ldap_group_mapper",
+			config:       map[string]any{"realm_id": "my-realm", "name": "group-mapper", "ldap_user_federation_id": "fed-1"},
+			client:       &fakeKeycloakClient{ldapMappers: map[string][]KeycloakObject{"fed-1": {{ID: "m-1", Match: "group-mapper"}}}},
+			want:         "my-realm/fed-1/m-1",
+		},
+		{
+			name:         "protocol mapper on concrete client GUID",
+			resourceType: "keycloak_openid_user_attribute_protocol_mapper",
+			config:       map[string]any{"realm_id": "my-realm", "name": "email", "client_id": "client-guid"},
+			client:       &fakeKeycloakClient{clientPM: map[string][]KeycloakObject{"client-guid": {{ID: "pm-1", Match: "email"}}}},
+			want:         "my-realm/client/client-guid/pm-1",
+		},
+		{
+			name:         "protocol mapper on concrete client scope GUID",
+			resourceType: "keycloak_openid_group_membership_protocol_mapper",
+			config:       map[string]any{"realm_id": "my-realm", "name": "groups", "client_scope_id": "scope-guid"},
+			client:       &fakeKeycloakClient{scopePM: map[string][]KeycloakObject{"scope-guid": {{ID: "pm-2", Match: "groups"}}}},
+			want:         "my-realm/client-scope/scope-guid/pm-2",
+		},
+		{
+			name:         "identity provider mapper keyed by alias",
+			resourceType: "keycloak_hardcoded_role_identity_provider_mapper",
+			config:       map[string]any{"realm_id": "my-realm", "name": "role-mapper", "identity_provider_alias": "my-idp"},
+			client:       &fakeKeycloakClient{idpMappers: map[string][]KeycloakObject{"my-idp": {{ID: "im-1", Match: "role-mapper"}}}},
+			want:         "my-realm/my-idp/im-1",
+		},
+		{
+			name:         "authorization permission on concrete resource server GUID",
+			resourceType: "keycloak_openid_client_authorization_permission",
+			config:       map[string]any{"realm_id": "my-realm", "name": "my-perm", "resource_server_id": "rs-guid"},
+			client:       &fakeKeycloakClient{authz: map[string][]KeycloakObject{"rs-guid/permission": {{ID: "perm-1", Match: "my-perm"}}}},
+			want:         "my-realm/rs-guid/perm-1",
+		},
+		{
+			name:         "authorization policy on concrete resource server GUID",
+			resourceType: "keycloak_openid_client_role_policy",
+			config:       map[string]any{"realm_id": "my-realm", "name": "my-policy", "resource_server_id": "rs-guid"},
+			client:       &fakeKeycloakClient{authz: map[string][]KeycloakObject{"rs-guid/policy": {{ID: "pol-1", Match: "my-policy"}}}},
+			want:         "my-realm/rs-guid/pol-1",
 		},
 		{
 			name:         "api error falls back to empty",
@@ -231,6 +306,56 @@ func TestResolveKeycloakStatus(t *testing.T) {
 			t.Fatalf("expected KeycloakUnsupported, got %v", res.Status)
 		}
 	})
+}
+
+// TestResolveKeycloakTracedParent verifies that a nested resource whose parent
+// GUID is computed (because the parent is being imported in the same plan) is
+// resolved by tracing the Terraform reference to that parent and recursively
+// resolving the parent's GUID.
+func TestResolveKeycloakTracedParent(t *testing.T) {
+	const childAddr = "keycloak_openid_user_attribute_protocol_mapper.m"
+	const parentAddr = "keycloak_openid_client.app"
+
+	plan := &tfjson.Plan{
+		Config: &tfjson.Config{
+			RootModule: &tfjson.ConfigModule{
+				Resources: []*tfjson.ConfigResource{
+					{
+						Address: childAddr,
+						Expressions: map[string]*tfjson.Expression{
+							"client_id": {ExpressionData: &tfjson.ExpressionData{
+								References: []string{parentAddr + ".id", parentAddr},
+							}},
+						},
+					},
+				},
+			},
+		},
+		ResourceChanges: []*tfjson.ResourceChange{
+			{
+				Address: parentAddr,
+				Type:    "keycloak_openid_client",
+				Change:  &tfjson.Change{After: map[string]any{"realm_id": "my-realm", "client_id": "app"}},
+			},
+		},
+	}
+
+	fake := &fakeKeycloakClient{
+		clients:  []KeycloakObject{{ID: "client-guid", Match: "app"}},
+		clientPM: map[string][]KeycloakObject{"client-guid": {{ID: "pm-guid", Match: "my-mapper"}}},
+	}
+
+	ctx := ctxWithClient(fake)
+	ctx.Plan = plan
+	ctx.CurrentResource = &tfjson.ResourceChange{Address: childAddr, Type: "keycloak_openid_user_attribute_protocol_mapper"}
+
+	// client_id is computed (absent from the child's config), forcing a trace.
+	childConfig := map[string]any{"realm_id": "my-realm", "name": "my-mapper"}
+	got := resolveCustomextractKeycloakImportID(ctx, "keycloak_openid_user_attribute_protocol_mapper", childConfig)
+	want := "my-realm/client/client-guid/pm-guid"
+	if got != want {
+		t.Fatalf("traced parent resolution = %q, want %q", got, want)
+	}
 }
 
 func TestResolveKeycloakImportIDNoClient(t *testing.T) {

@@ -35,6 +35,15 @@ type KeycloakClient interface {
 	ListTopLevelGroups(ctx context.Context, realm string) ([]KeycloakObject, error)
 	ListAuthenticationFlows(ctx context.Context, realm string) ([]KeycloakObject, error)
 	ListUserFederations(ctx context.Context, realm string) ([]KeycloakObject, error)
+
+	// Nested lookups: the parent is identified by its server-generated GUID
+	// (resolved either from concrete config or via the Expression Tracer).
+	ListSubGroups(ctx context.Context, realm, parentGUID string) ([]KeycloakObject, error)
+	ListLdapMappers(ctx context.Context, realm, federationGUID string) ([]KeycloakObject, error)
+	ListClientProtocolMappers(ctx context.Context, realm, clientGUID string) ([]KeycloakObject, error)
+	ListClientScopeProtocolMappers(ctx context.Context, realm, clientScopeGUID string) ([]KeycloakObject, error)
+	ListIdentityProviderMappers(ctx context.Context, realm, alias string) ([]KeycloakObject, error)
+	ListAuthorizationObjects(ctx context.Context, realm, resourceServerGUID, kind string) ([]KeycloakObject, error)
 }
 
 // GetKeycloakClient lazily constructs a Keycloak admin client from the same
@@ -313,4 +322,31 @@ func (c *keycloakHTTPClient) ListAuthenticationFlows(ctx context.Context, realm 
 		out = append(out, KeycloakObject{ID: r.ID, Match: r.Alias})
 	}
 	return out, nil
+}
+
+func (c *keycloakHTTPClient) ListSubGroups(ctx context.Context, realm, parentGUID string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "groups/"+url.PathEscape(parentGUID)+"/children", nil)
+}
+
+func (c *keycloakHTTPClient) ListLdapMappers(ctx context.Context, realm, federationGUID string) ([]KeycloakObject, error) {
+	q := url.Values{}
+	q.Set("parent", federationGUID)
+	q.Set("type", "org.keycloak.storage.ldap.mappers.LDAPStorageMapper")
+	return c.listNamed(ctx, realm, "components", q)
+}
+
+func (c *keycloakHTTPClient) ListClientProtocolMappers(ctx context.Context, realm, clientGUID string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "clients/"+url.PathEscape(clientGUID)+"/protocol-mappers/models", nil)
+}
+
+func (c *keycloakHTTPClient) ListClientScopeProtocolMappers(ctx context.Context, realm, clientScopeGUID string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "client-scopes/"+url.PathEscape(clientScopeGUID)+"/protocol-mappers/models", nil)
+}
+
+func (c *keycloakHTTPClient) ListIdentityProviderMappers(ctx context.Context, realm, alias string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "identity-provider/instances/"+url.PathEscape(alias)+"/mappers", nil)
+}
+
+func (c *keycloakHTTPClient) ListAuthorizationObjects(ctx context.Context, realm, resourceServerGUID, kind string) ([]KeycloakObject, error) {
+	return c.listNamed(ctx, realm, "clients/"+url.PathEscape(resourceServerGUID)+"/authz/resource-server/"+kind, nil)
 }
