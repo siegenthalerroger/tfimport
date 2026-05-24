@@ -69,6 +69,11 @@ func newKeycloakHTTPClientFromEnv() *keycloakHTTPClient {
 	}
 
 	basePath := os.Getenv("KEYCLOAK_BASE_PATH")
+	if basePath != "" && !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	basePath = strings.TrimRight(basePath, "/")
+
 	adminURL := strings.TrimRight(os.Getenv("KEYCLOAK_ADMIN_URL"), "/")
 	if adminURL == "" {
 		adminURL = baseURL
@@ -96,8 +101,12 @@ func newKeycloakHTTPClientFromEnv() *keycloakHTTPClient {
 		httpClient:   &http.Client{Timeout: keycloakTimeout()},
 	}
 
-	if c.staticToken == "" && c.clientSecret == "" && (c.username == "" || c.password == "") {
-		log.Printf("Keycloak: no usable credentials (set KEYCLOAK_CLIENT_SECRET or KEYCLOAK_USER/KEYCLOAK_PASSWORD), skipping API-based ID resolution")
+	switch {
+	case c.staticToken != "":
+	case c.username != "" && c.password != "": // password grant
+	case c.clientSecret != "" && c.clientID != "": // client_credentials grant
+	default:
+		log.Printf("Keycloak: no usable credentials (set KEYCLOAK_ACCESS_TOKEN, KEYCLOAK_CLIENT_ID+KEYCLOAK_CLIENT_SECRET, or KEYCLOAK_USER+KEYCLOAK_PASSWORD), skipping API-based ID resolution")
 		return nil
 	}
 

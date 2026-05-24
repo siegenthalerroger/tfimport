@@ -133,7 +133,10 @@ func (h *itHelper) do(ctx context.Context, method, fullURL string, body any) *ht
 	}
 	var rdr io.Reader
 	if body != nil {
-		b, _ := json.Marshal(body)
+		b, err := json.Marshal(body)
+		if err != nil {
+			h.t.Fatalf("marshal body: %v", err)
+		}
 		rdr = bytes.NewReader(b)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, fullURL, rdr)

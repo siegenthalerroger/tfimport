@@ -43,7 +43,7 @@ to core `tfimport` (see [Not yet supported](#not-yet-supported)).
 
 The admin client is built lazily from the same environment variables as the
 Keycloak provider. If `KEYCLOAK_URL` or credentials are absent, API resolution is
-skipped silently and only the static mappings apply.
+skipped (an informational line is logged) and only the static mappings apply.
 
 | Variable | Purpose |
 |----------|---------|

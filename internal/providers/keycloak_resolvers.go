@@ -2,8 +2,13 @@ package providers
 
 import (
 	"log"
+	"regexp"
 	"strings"
 )
+
+// indexSuffix matches Terraform address indices (e.g. `["bar"]`, `[0]`), which
+// appear in plan resource addresses but not in config resource addresses.
+var indexSuffix = regexp.MustCompile(`\[[^\]]+\]`)
 
 // KeycloakStatus describes the outcome of attempting to resolve a resource's
 // import ID against the Keycloak admin API.
@@ -309,10 +314,14 @@ func configReferences(ctx *ProviderContext, attr string) bool {
 	if ctx == nil || ctx.Plan == nil || ctx.Plan.Config == nil || ctx.CurrentResource == nil {
 		return false
 	}
-	cfgRes := findConfigResource(ctx.Plan.Config.RootModule, ctx.CurrentResource.Address)
+	address := indexSuffix.ReplaceAllString(ctx.CurrentResource.Address, "")
+	cfgRes := findConfigResource(ctx.Plan.Config.RootModule, address)
 	if cfgRes == nil {
 		return false
 	}
 	expr, ok := cfgRes.Expressions[attr]
-	return ok && expr != nil && (len(expr.References) > 0 || expr.ConstantValue != nil)
+	if !ok || expr == nil || expr.ExpressionData == nil {
+		return false
+	}
+	return len(expr.References) > 0 || expr.ConstantValue != nil
 }
